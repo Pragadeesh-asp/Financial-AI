@@ -61,7 +61,7 @@ def build_index():
 def search(query, index, k=1):
 
     if index is None:
-        return ["No documents available."]
+        return None, 0
 
     query_vector = model.encode(
         [query],
@@ -71,6 +71,7 @@ def search(query, index, k=1):
 
     distances, indices = index.search(query_vector, k)
 
-    results = [documents[i] for i in indices[0]]
+    score = float(distances[0][0])
+    result = documents[indices[0][0]]
 
-    return results
+    return result, score

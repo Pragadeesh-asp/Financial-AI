@@ -94,21 +94,23 @@ print("FAISS index built successfully.")
 async def chat(message: str = Form(...)):
 
     # Search relevant context
-    context = search(message, index, k=1)
-    print("RAG context:", context)
+    context, score = search(message, index, k=1)
 
-    if context and context[0] != "No documents available.":
+    print("Similarity Score:", score)
+
+    if context and score > 0.35:
 
         prompt = f"""
 Use the following financial document to answer the question.
 
 Document:
-{context[0]}
+{context}
 
 Question:
 {message}
 
-Answer clearly based on the document.
+If the document contains the answer, answer from it.
+If the document does not contain the answer, answer using your financial knowledge.
 """
 
     else:
