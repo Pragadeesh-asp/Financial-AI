@@ -1,7 +1,6 @@
 import mysql.connector
 from datetime import datetime
 from collections import Counter
-import time
 import re
 
 from selenium import webdriver
@@ -32,7 +31,8 @@ id INT AUTO_INCREMENT PRIMARY KEY,
 date DATE,
 metal VARCHAR(20),
 karat VARCHAR(20),
-price INT
+price INT,
+UNIQUE(date, metal, karat)
 )
 """)
 
@@ -44,11 +44,13 @@ conn.commit()
 # -------------------------
 
 def start_browser():
-
     options = Options()
 
+    # 🔥 IMPORTANT FIXES
     options.add_argument("--headless=new")
-    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
 
     driver = webdriver.Chrome(
@@ -67,87 +69,108 @@ def extract_prices(text):
 
     rates = {}
 
-    patterns = {
-        "24KT": r"24\s?KT.*?₹\s?([\d,]+)",
-        "22KT": r"22\s?KT.*?₹\s?([\d,]+)",
-        "18KT": r"18\s?KT.*?₹\s?([\d,]+)",
-        "14KT": r"14\s?KT.*?₹\s?([\d,]+)",
-        "Silver": r"SILVER.*?₹\s?([\d,]+)"
-    }
-
-    for karat, pattern in patterns.items():
-
-        match = re.search(pattern, text, re.I)
-
+    for karat in ["24", "22", "18", "14"]:
+        match = re.search(rf"{karat}.*?₹\s?([\d,]+)", text, re.I)
         if match:
-            rates[karat] = int(match.group(1).replace(",", ""))
+            rates[f"{karat}KT"] = int(match.group(1).replace(",", ""))
+
+    silver = re.search(r"Silver.*?₹\s?([\d,]+)", text, re.I)
+    if silver:
+        rates["Silver"] = int(silver.group(1).replace(",", ""))
 
     return rates
 
 
 # -------------------------
-# GRT SCRAPER
+# HELPER
 # -------------------------
 
+def get_page_text(driver):
+    WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.TAG_NAME, "body"))
+    )
+    return driver.find_element(By.TAG_NAME, "body").text
+
+
+# -------------------------
+# SCRAPERS
+# -------------------------
 def scrape_grt(driver):
-
     driver.get("https://www.grtjewels.com")
+    rates = {}
 
-    time.sleep(5)
+    try:
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.TAG_NAME, "body"))
+        )
 
-    text = driver.find_element(By.TAG_NAME, "body").text
+        html = driver.page_source
 
-    return extract_prices(text)
+        patterns = {
+            "24KT": r"24\s*KT.*?₹\s?([\d,]+)",
+            "22KT": r"22\s*KT.*?₹\s?([\d,]+)",
+            "18KT": r"18\s*KT.*?₹\s?([\d,]+)",
+            "14KT": r"14\s*KT.*?₹\s?([\d,]+)",
+            "Silver": r"Silver.*?₹\s?([\d,]+)"
+        }
 
+        for k, p in patterns.items():
+            match = re.search(p, html, re.I)
+            if match:
+                rates[k] = int(match.group(1).replace(",", ""))
 
-# -------------------------
-# THANGAMAYIL SCRAPER
-# -------------------------
+    except Exception as e:
+        print("GRT ERROR:", e)
+
+    return rates
+
 
 def scrape_thangamayil(driver):
-
     driver.get("https://www.thangamayil.com")
-
-    time.sleep(5)
-
-    text = driver.find_element(By.TAG_NAME, "body").text
-
+    text = get_page_text(driver)
     return extract_prices(text)
-
-
-# -------------------------
-# LALITHA SCRAPER
-# -------------------------
 
 def scrape_lalitha(driver):
-
     driver.get("https://www.lalithajewellery.com")
+    rates = {}
 
-    time.sleep(5)
+    try:
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.TAG_NAME, "body"))
+        )
 
-    text = driver.find_element(By.TAG_NAME, "body").text
+        html = driver.page_source
 
-    return extract_prices(text)
+        # Lalitha mainly shows 22KT + silver
+        gold22 = re.search(r"Gold.*?22.*?₹\s?([\d,]+)", html, re.I)
+        silver = re.search(r"Silver.*?₹\s?([\d,]+)", html, re.I)
 
+        if gold22:
+            rates["22KT"] = int(gold22.group(1).replace(",", ""))
 
-# -------------------------
-# MAJORITY PRICE
-# -------------------------
+        if silver:
+            rates["Silver"] = int(silver.group(1).replace(",", ""))
+
+    except Exception as e:
+        print("LALITHA ERROR:", e)
+
+    return rates
 
 def majority_price(values, priority):
 
     values = [v for v in values if v]
 
     if not values:
-        return priority
+        return None
 
     counter = Counter(values)
+    most_common = counter.most_common()
 
-    most = counter.most_common()
+    # ✅ Majority exists
+    if most_common[0][1] > 1:
+        return most_common[0][0]
 
-    if most[0][1] > 1:
-        return most[0][0]
-
+    # ❗ No majority → return GRT (priority)
     return priority
 
 
@@ -164,9 +187,10 @@ def save_rates(final_rates):
         metal = "Gold" if karat != "Silver" else "Silver"
 
         cursor.execute("""
-        INSERT INTO metal_rates(date,metal,karat,price)
-        VALUES(%s,%s,%s,%s)
-        """,(today, metal, karat, price))
+        INSERT INTO metal_rates(date, metal, karat, price)
+        VALUES(%s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE price=VALUES(price)
+        """, (today, metal, karat, price))
 
     conn.commit()
 
@@ -193,7 +217,7 @@ def scrape_all():
 
     final_rates = {}
 
-    for karat in ["24KT","22KT","18KT","14KT","Silver"]:
+    for karat in ["24KT", "22KT", "18KT", "14KT", "Silver"]:
 
         prices = [
             grt.get(karat),
@@ -201,9 +225,11 @@ def scrape_all():
             lal.get(karat)
         ]
 
-        final = majority_price(prices, grt.get(karat))
+        priority = grt.get(karat) or thang.get(karat) or lal.get(karat)
 
-        if final:
+        final = majority_price(prices, priority)
+
+        if final is not None:
             final_rates[karat] = final
 
     print("Final Market Rates:", final_rates)
@@ -217,6 +243,6 @@ def scrape_all():
 # RUN
 # -------------------------
 
-scrape_all()
-
-conn.close()
+if __name__ == "__main__":
+    scrape_all()
+    conn.close()
