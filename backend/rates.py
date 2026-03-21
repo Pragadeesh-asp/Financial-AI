@@ -1,4 +1,4 @@
-#Hello SINDHUJA
+
 
 import mysql.connector
 from datetime import datetime
