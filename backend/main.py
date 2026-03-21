@@ -1,4 +1,4 @@
-#EREN
+#EREN the jeeva
 
 """
 FinanceTracker — FastAPI Backend
