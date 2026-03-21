@@ -1,5 +1,5 @@
 """
-
+FinanceTracker — FastAPI Backend
 =================================
 Install dependencies:
     pip install fastapi uvicorn mysql-connector-python python-multipart
