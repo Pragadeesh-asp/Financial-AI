@@ -1,5 +1,4 @@
 
-
 import mysql.connector
 from datetime import datetime
 from collections import Counter
